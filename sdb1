@@ -1,0 +1,91 @@
+#!/bin/bash
+# Program
+
+# ODMONTOWANIE KARTY SD JESLI NADAL WIDOCZNA W SYSTEMIE
+if df | grep -q '/mnt/sdb1' # Sprawdzenie czy jest zamontowane
+then
+	sudo umount /mnt/sdb1
+	sudo rm -r /mnt/sdb1
+fi
+
+# CZYSZCZENIE ZMIENNYCH
+suma1_b=""
+suma2_b=""
+data_b=""
+label_b=""
+nazwa_folderu_b=""
+
+# CZYTANIE FOLDERU GLOWNEGO NA ZDJECIA
+#
+sciezka="$(cat /home/pi/Desktop/Zgrywanie_SD/sciezka)"
+#sciezka=$(cat /mnt/test/foto/do_edycji)
+
+# TWORZENIE NAZWY FOLDERU NA PODSTAWIE LABELA KARTY I AKTUALNEJ DATY
+label_b=`sudo lsblk -o LABEL /dev/sdb1`
+data_b=$(date +%Y-%m-%d_%H%M%S)
+nazwa_folderu_b=${label_b}_${data_b}
+
+# ZAMONTOWANIE KARTY SD
+sudo mkdir /mnt/sdb1
+sudo mount /dev/sdb1 /mnt/sdb1
+
+# SPRAWDZENIE NAZWY FOLDERU
+echo $nazwa_folderu_b
+
+# SZUKANIE ZDJEC W FOLDERACH I OKRESLENIE SUMY KONTROLNEJ
+suma1_b=$(sudo find /mnt/sdb1 -iname "*.*" -exec md5sum {} + | awk '{print $1}' | sort | md5sum)
+echo "Zamontowano sdb1"
+
+#sudo mogrify -resize '1600x1200' /mnt/sdb1/*.*
+#echo "Zmniejszono zdjecia"
+
+# TWORZENIE FOLDERU TYMCZASOWEGO ZE ZDJECIAMI PRZENIESIONYMI Z KARTY
+sudo sshpass -p '123qaz123qaz' ssh -o StrictHostKeyChecking=no zdjecia@192.168.0.108 mkdir -p temp_b </dev/null
+echo "Utworzono tempa"
+
+# WYSYLANIE ZDJEC DO FOLDERU TYMCZASOWEGO
+sudo sshpass -p '123qaz123qaz' scp -o StrictHostKeyChecking=no -p $(find /mnt/sdb1 -iname "*.*") zdjecia@192.168.0.108:temp_b </dev/null
+echo "Wyslano zdjecia do tempa"
+
+# OKRESLENIE SUMY KONTROLNEJ PRZENIESIONYCH ZDJEC
+suma2_b=$(sudo sshpass -p '123qaz123qaz' ssh zdjecia@192.168.0.108 find temp_b -iname "*.*" -exec md5sum {} + | awk '{print $1}' | sort | md5sum) </dev/null
+
+# WYSWIETLENIE SUM KONTROLNYCH
+echo "Stworzono sume dla *ow w tempie"
+echo "Sumy:"
+echo $suma1_b
+echo $suma2_b
+
+# POROWNANIE SUM KONTROLNYCH W CELU SPRAWDZENIA POPRAWNOSCI SKOPIOWANIA ZDJEC Z KARTY
+if df | grep -q '/dev/sdb1'
+then
+	if [ "$suma1_b" = "$suma2_b" ]
+	then
+		# ZMIANA NAZWY FOLDERU Z TEMP NA FOLDER Z DATA
+		if ls -1qA /mnt/sdb1/ | grep -q .
+		then
+			echo "Sumy sa identyczne. Przeniesienie zdjec z tempa do glownego folderu"
+			sudo sshpass -p '123qaz123qaz' ssh -o StrictHostKeyChecking=no zdjecia@192.168.0.108 mv temp_b `echo $nazwa_folderu_b | cut -b 7-` </dev/null
+		else
+			echo "Karta SD jest pusta"
+			sudo sshpass -p '123qaz123qaz' ssh -o StrictHostKeyChecking=no zdjecia@192.168.0.108 rm -r temp_b </dev/null
+		fi
+		sudo umount /mnt/sdb1
+		sudo umount /dev/sdb1
+		sudo mkfs.vfat -I /dev/sdb1 -n `echo $label_b | cut -b 7-`
+		sudo rm -r /mnt/sdb1
+		exit 1
+	else 
+		echo "Blad, sumy sa inne"
+		sudo umount /mnt/sdb1
+		sudo rm -r /mnt/sdb1
+		sudo sshpass -p '123qaz123qaz' ssh -o StrictHostKeyChecking=no zdjecia@192.168.0.108 rm -r temp_b </dev/null
+		exit 1
+	fi
+else
+	echo "Blad"
+	sudo umount /mnt/sdb1
+	sudo rm -r /mnt/sdb1
+	sudo sshpass -p '123qaz123qaz' ssh -o StrictHostKeyChecking=no zdjecia@192.168.0.108 rm -r temp_b </dev/null
+	exit 1
+fi
